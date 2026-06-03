@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation'
 import { getAuthUser, createAdminClient } from '@/lib/supabase/server'
 import Sidebar from '@/components/Sidebar'
 import BottomNav from '@/components/BottomNav'
+import PaymentNotifier from '@/components/PaymentNotifier'
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const user = await getAuthUser()
@@ -22,6 +23,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
         {children}
       </main>
       <BottomNav />
+      <PaymentNotifier currentUserId={user.id} />
     </div>
   )
 }
