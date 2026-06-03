@@ -112,7 +112,7 @@ export default async function GroupDetailPage({ params }: { params: Promise<{ id
       </section>
 
       {/* Settle up */}
-      <SettleUpButton groupId={id} currentUserId={user!.id} />
+      <SettleUpButton groupId={id} />
 
       {/* Recent expenses */}
       <section>

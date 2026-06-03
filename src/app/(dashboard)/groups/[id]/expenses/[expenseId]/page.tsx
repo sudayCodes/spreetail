@@ -78,7 +78,7 @@ export default async function ExpenseDetailPage({
         <Link href={`/groups/${groupId}`} className="text-indigo-500 hover:underline">group page</Link>.
       </p>
 
-      <SettleUpButton groupId={groupId} currentUserId={user!.id} />
+      <SettleUpButton groupId={groupId} />
     </div>
   )
 }

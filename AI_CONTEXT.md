@@ -241,6 +241,7 @@ Implemented as Supabase RPCs: `get_user_group_balance(p_group_id, p_user_id)` an
 | GET/POST | `/api/groups/[id]/settlements` | History / record payment |
 | GET/POST | `/api/groups/[id]/messages` | Chat history / send |
 | GET | `/api/groups/[id]/activity` | Activity log |
+| GET | `/api/groups/[id]/pairwise-debts` | Exact amounts current user owes each group member |
 | GET | `/api/dashboard` | Cross-group balance totals |
 | GET | `/api/users?email=` | Check if user exists by email |
 
@@ -299,6 +300,7 @@ Implemented as Supabase RPCs: `get_user_group_balance(p_group_id, p_user_id)` an
 | `001_initial_schema.sql` | All 8 tables, RLS policies, indexes, `on_auth_user_created` trigger |
 | `002_helper_functions.sql` | `get_user_id_by_email`, `get_user_group_balance`, `get_group_balances`, `is_group_member` |
 | `003_realtime.sql` | Adds tables to `supabase_realtime` publication |
+| `004_pairwise_debts.sql` | `get_pairwise_debts(p_group_id, p_user_id)` — exact per-person debt for current user |
 
 Run all three in Supabase SQL Editor in order.
 
@@ -316,6 +318,107 @@ Run all three in Supabase SQL Editor in order.
 
 ---
 
-## 19. Bugs Noted (to fix after Day 3)
+## 19. Bug Registry (post-Day 3)
 
-- User has a bug list — to be addressed in next session
+Bugs are listed in fix priority order. Each entry has: root cause, affected files, and exact fix.
+
+---
+
+### BUG-01 — SettleUpButton pre-fills creditor's total group balance instead of current user's share
+**Severity:** Critical  
+**Status:** Fixed  
+**Files:** `src/components/SettleUpButton.tsx:47`
+
+**Root cause:**
+```js
+setAmount((creditor.balance / 100).toFixed(2))  // WRONG: creditor's total group balance
+```
+`creditor.balance` = sum of what the ENTIRE GROUP owes that person. In a 3-person group where Alice paid $90 (each owes $30), Alice's balance = +$60. When Bob opens settle-up and selects Alice, it pre-fills **$60** instead of **$30**. If Bob pays $60, his balance flips to +$30 (he becomes a creditor) and Alice's drops to $0. Charlie can never pay Alice back. Ledger is permanently corrupted.
+
+**Fix:**
+1. After fetching balances, extract the current user's own balance entry and store it in state (`myBalance`).
+2. Change pre-fill: `Math.min(Math.abs(myBalance), creditor.balance)` — lesser of "what I owe total" and "what this creditor is owed".
+3. Display current user's total debt at top of modal: "You owe $X total in this group".
+4. Update dropdown label from `"owed $X"` (creditor's total) to `"you may owe: $X"` (the suggested payment).
+
+**Limitation:** In multi-creditor scenarios (debtor owes multiple people), the min formula gives the best available suggestion but cannot compute exact pairwise amounts without a debt simplification algorithm. The amount field is editable so users can adjust.
+
+---
+
+### BUG-02 — Expense edit breaks balances when amount changes without member_ids
+**Severity:** Critical  
+**Status:** Not fixed  
+**Files:** `src/app/api/expenses/[id]/route.ts:66`
+
+**Root cause:**
+```js
+if (member_ids?.length) {
+  await db.from('expense_splits').delete().eq('expense_id', id)
+  const splits = calculateSplits(totalCents, member_ids, split_type, split_values)
+  ...
+}
+```
+If `amount` is updated but `member_ids` is not provided, `total_amount` is saved with the new value but old `expense_splits` rows are untouched. The balance formula then reads: `money_fronted = new amount` vs `share_owed = old stale splits`. Balances break silently.
+
+**Fix:** When `member_ids` is absent but `amount` or `split_type` changed, fetch the existing split user_ids from `expense_splits` where `expense_id = id`, use those as `member_ids`, and recalculate splits with the new `totalCents`. Always keep splits in sync with `total_amount`.
+
+---
+
+### BUG-03 — No overpayment guard on settlement
+**Severity:** Medium  
+**Status:** Not fixed  
+**Files:** `src/app/api/groups/[id]/settlements/route.ts:44`
+
+**Root cause:** The settlements POST API inserts any amount with no validation. If a user overpays (e.g. due to BUG-01's wrong pre-fill), their balance flips positive (they become an accidental creditor) and the receiver's balance flips negative (they become an accidental debtor).
+
+**Fix:** Before inserting, call `get_user_group_balance(groupId, userId)`. If `amountCents > Math.abs(currentBalance)`, return 400 with `"Amount exceeds what you owe in this group"`. This acts as a safety net independent of the UI fix in BUG-01.
+
+---
+
+### BUG-04 — API response lag on every tab/route
+**Severity:** Medium  
+**Status:** Not fixed  
+**Files:** `src/lib/supabase/server.ts`, `src/app/api/dashboard/route.ts`, `src/app/(dashboard)/groups/[id]/page.tsx`
+
+**Root causes (multiple):**
+
+1. **`createAdminClient()` instantiates a new Supabase client on every call** — no module-level singleton. Every API route and Server Component that calls this re-creates the HTTP client from scratch.
+
+2. **`supabase.auth.getUser()` is a round-trip network call on every request** — Vercel → Supabase Auth API → back. Adds ~50–150ms per request. Required for security (vs. reading session from cookies) but compounds with other latency.
+
+3. **Dashboard N+1 pattern** — `src/app/api/dashboard/route.ts:18` calls `get_user_group_balance` once per group in `Promise.all`. For a user in 5 groups = 5 separate RPC calls to Supabase instead of 1.
+
+4. **Sequential profile fetch after parallel data fetch** — `src/app/(dashboard)/groups/[id]/page.tsx:52` fetches profiles after the main `Promise.all` resolves instead of including it in the parallel batch.
+
+5. **Vercel cold starts** — serverless functions on Vercel free tier can take 200–500ms to cold-start when idle.
+
+**Fixes:**
+1. Memoize `createAdminClient()` at module level so it's instantiated once per Vercel function lifecycle:
+   ```js
+   let _admin: ReturnType<typeof createSupabaseClient> | null = null
+   export function createAdminClient() {
+     return _admin ??= createSupabaseClient(url, key, opts)
+   }
+   ```
+2. Dashboard: replace N individual `get_user_group_balance` RPCs with a single SQL query that aggregates all groups at once (new RPC `get_all_user_balances(p_user_id)`).
+3. Group detail page: move the profile fetch inside the `Promise.all` by joining profiles directly in the member/expense/settlement queries instead of a separate follow-up query.
+
+---
+
+### BUG-05 — SettleUpButton modal gives no feedback on current user's total debt
+**Severity:** Low (UX)  
+**Status:** Not fixed  
+**Files:** `src/components/SettleUpButton.tsx`
+
+**Root cause:** The modal opens and shows who you can pay, but doesn't tell the current user how much they owe in total. There's no summary like "You owe $30 total in this group." Users have no reference point to know if a payment fully settles their debt.
+
+**Fix:** After fetching balances, find the current user's entry and display their balance at the top of the modal. Also — if the current user has a positive or zero balance, show "You're settled up — nothing to pay" immediately on open instead of showing an empty creditors list.
+
+---
+
+### Fix order
+1. BUG-01 (SettleUpButton wrong amount) — most visible, corrupts ledger
+2. BUG-02 (expense edit stale splits) — data integrity
+3. BUG-03 (overpayment guard) — safety net after BUG-01 fix
+4. BUG-04 (lag) — `createAdminClient` singleton + dashboard N+1
+5. BUG-05 (UX debt summary in modal)

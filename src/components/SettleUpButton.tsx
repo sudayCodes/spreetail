@@ -3,52 +3,51 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 
-interface Balance {
-  user_id: string
-  name: string
-  balance: number
+interface PairwiseDebt {
+  creditor_id: string
+  creditor_name: string
+  net_owed: number
 }
 
 export default function SettleUpButton({
   groupId,
-  currentUserId,
 }: {
   groupId: string
-  currentUserId: string
 }) {
   const [open, setOpen] = useState(false)
-  const [creditors, setCreditors] = useState<{ id: string; name: string; balance: number }[]>([])
+  const [debts, setDebts] = useState<PairwiseDebt[]>([])
   const [receiverId, setReceiverId] = useState('')
   const [amount, setAmount] = useState('')
   const [loading, setLoading] = useState(false)
+  const [fetching, setFetching] = useState(false)
   const [error, setError] = useState('')
   const router = useRouter()
 
   useEffect(() => {
     if (!open) return
-    fetch(`/api/groups/${groupId}/balances`)
+    setFetching(true)
+    fetch(`/api/groups/${groupId}/pairwise-debts`)
       .then(r => r.json())
-      .then(data => {
-        // Show only people with positive balance (they are owed money), excluding current user
-        const list = (data.balances as Balance[])
-          .filter(b => b.user_id !== currentUserId && b.balance > 0)
-          .map(b => ({ id: b.user_id, name: b.name, balance: b.balance }))
-        setCreditors(list)
-      })
+      .then(data => setDebts(data.debts ?? []))
       .catch(() => {})
-  }, [open, groupId, currentUserId])
+      .finally(() => setFetching(false))
+  }, [open, groupId])
 
-  // When receiver changes, pre-fill with the exact amount current user owes
   function handleReceiverChange(uid: string) {
     setReceiverId(uid)
-    const creditor = creditors.find(c => c.id === uid)
-    if (creditor) {
-      // Suggest the amount this person is owed (capped to a reasonable suggestion)
-      setAmount((creditor.balance / 100).toFixed(2))
-    }
+    const debt = debts.find(d => d.creditor_id === uid)
+    if (debt) setAmount((debt.net_owed / 100).toFixed(2))
   }
 
-  async function handleSettle(e: React.FormEvent) {
+  function handleClose() {
+    setOpen(false)
+    setError('')
+    setReceiverId('')
+    setAmount('')
+    setDebts([])
+  }
+
+  async function handleSettle(e: { preventDefault(): void }) {
     e.preventDefault()
     setLoading(true)
     setError('')
@@ -59,15 +58,15 @@ export default function SettleUpButton({
     })
     setLoading(false)
     if (res.ok) {
-      setOpen(false)
-      setAmount('')
-      setReceiverId('')
+      handleClose()
       router.refresh()
     } else {
       const data = await res.json()
       setError(data.error ?? 'Failed to record payment')
     }
   }
+
+  const totalOwed = debts.reduce((sum, d) => sum + d.net_owed, 0)
 
   return (
     <>
@@ -88,12 +87,22 @@ export default function SettleUpButton({
 
             {error && <p className="text-sm text-red-500">{error}</p>}
 
-            {creditors.length === 0 ? (
+            {fetching ? (
+              <p className="text-sm text-gray-400 py-2">Loading…</p>
+            ) : debts.length === 0 ? (
               <p className="text-sm text-gray-500 py-2">
-                Everyone is settled up in this group — no payments needed.
+                You're all settled up — no payments needed.
               </p>
             ) : (
               <>
+                <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  <p className="text-xs text-amber-700">
+                    You owe{' '}
+                    <span className="font-semibold">${(totalOwed / 100).toFixed(2)}</span>{' '}
+                    total in this group
+                  </p>
+                </div>
+
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Paying to</label>
                   <select
@@ -103,9 +112,9 @@ export default function SettleUpButton({
                     className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   >
                     <option value="">Select person…</option>
-                    {creditors.map(c => (
-                      <option key={c.id} value={c.id}>
-                        {c.name} (owed ${(c.balance / 100).toFixed(2)})
+                    {debts.map(d => (
+                      <option key={d.creditor_id} value={d.creditor_id}>
+                        {d.creditor_name} — you owe ${(d.net_owed / 100).toFixed(2)}
                       </option>
                     ))}
                   </select>
@@ -130,12 +139,12 @@ export default function SettleUpButton({
             <div className="flex gap-3">
               <button
                 type="button"
-                onClick={() => { setOpen(false); setError(''); setReceiverId(''); setAmount('') }}
+                onClick={handleClose}
                 className="flex-1 border border-gray-300 rounded-lg py-2 text-sm text-gray-500"
               >
-                {creditors.length === 0 ? 'Close' : 'Cancel'}
+                {debts.length === 0 ? 'Close' : 'Cancel'}
               </button>
-              {creditors.length > 0 && (
+              {debts.length > 0 && (
                 <button
                   type="submit"
                   disabled={loading}
