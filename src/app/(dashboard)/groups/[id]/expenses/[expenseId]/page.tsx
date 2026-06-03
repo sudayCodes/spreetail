@@ -1,7 +1,6 @@
 import { notFound } from 'next/navigation'
 import { createClient, createAdminClient } from '@/lib/supabase/server'
 import Link from 'next/link'
-import GroupChat from '@/components/GroupChat'
 import SettleUpButton from '@/components/SettleUpButton'
 
 export default async function ExpenseDetailPage({
@@ -15,22 +14,26 @@ export default async function ExpenseDetailPage({
 
   const db = createAdminClient()
 
-  const { data: expense } = await db.from('expenses').select('*').eq('id', expenseId).single()
-  if (!expense || expense.group_id !== groupId) notFound()
+  const [
+    { data: expense },
+    { data: membership },
+  ] = await Promise.all([
+    db.from('expenses').select('*').eq('id', expenseId).single(),
+    db.from('group_members').select('user_id').eq('group_id', groupId).eq('user_id', user!.id).single(),
+  ])
 
-  const { data: membership } = await db
-    .from('group_members').select('user_id')
-    .eq('group_id', groupId).eq('user_id', user!.id).single()
+  if (!expense || expense.group_id !== groupId) notFound()
   if (!membership) notFound()
 
-  const { data: splitRows } = await db
-    .from('expense_splits').select('user_id, amount_owed').eq('expense_id', expenseId)
+  const [
+    { data: splitRows },
+    { data: paidByProfile },
+  ] = await Promise.all([
+    db.from('expense_splits').select('user_id, amount_owed').eq('expense_id', expenseId),
+    db.from('profiles').select('name').eq('id', expense.paid_by).single(),
+  ])
 
-  const { data: paidByProfile } = await db
-    .from('profiles').select('name').eq('id', expense.paid_by).single()
-
-  // Resolve all names for splits
-  const splitUserIds = (splitRows ?? []).map(s => s.user_id)
+  const splitUserIds = [...new Set((splitRows ?? []).map(s => s.user_id))]
   const { data: splitProfiles } = splitUserIds.length
     ? await db.from('profiles').select('id, name').in('id', splitUserIds)
     : { data: [] }
@@ -42,26 +45,8 @@ export default async function ExpenseDetailPage({
     amount_owed: s.amount_owed,
   }))
 
-  const { data: rawMessages } = await db
-    .from('messages').select('id, sender_id, content, created_at')
-    .eq('group_id', groupId).order('created_at', { ascending: true }).limit(100)
-
-  const senderIds = [...new Set((rawMessages ?? []).map(m => m.sender_id))]
-  const { data: senderProfiles } = senderIds.length
-    ? await db.from('profiles').select('id, name').in('id', senderIds)
-    : { data: [] }
-  const senderMap = Object.fromEntries((senderProfiles ?? []).map(p => [p.id, p.name]))
-
-  const msgs = (rawMessages ?? []).map(m => ({
-    id: m.id,
-    sender_id: m.sender_id,
-    sender_name: senderMap[m.sender_id] ?? 'Unknown',
-    content: m.content,
-    created_at: m.created_at,
-  }))
-
   return (
-    <div className="max-w-2xl mx-auto px-6 py-8 space-y-8">
+    <div className="max-w-2xl mx-auto px-4 sm:px-6 py-8 space-y-8">
       <div>
         <Link href={`/groups/${groupId}`} className="text-xs text-gray-400 hover:text-gray-600">← Back to group</Link>
         <h1 className="text-2xl font-bold mt-2">{expense.description}</h1>
@@ -88,12 +73,12 @@ export default async function ExpenseDetailPage({
         </div>
       </section>
 
-      <SettleUpButton groupId={groupId} currentUserId={user!.id} />
+      <p className="text-xs text-gray-400 text-center">
+        Chat and settle up are available on the{' '}
+        <Link href={`/groups/${groupId}`} className="text-indigo-500 hover:underline">group page</Link>.
+      </p>
 
-      <section>
-        <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">Group chat</h2>
-        <GroupChat groupId={groupId} currentUserId={user!.id} initialMessages={msgs} />
-      </section>
+      <SettleUpButton groupId={groupId} currentUserId={user!.id} />
     </div>
   )
 }

@@ -24,7 +24,7 @@ export default function Sidebar({ userName }: { userName: string }) {
   }
 
   return (
-    <aside className="w-56 shrink-0 bg-white border-r border-gray-200 flex flex-col h-full">
+    <aside className="hidden md:flex w-56 shrink-0 bg-white border-r border-gray-200 flex-col h-full">
       <div className="px-5 py-5 border-b border-gray-100">
         <span className="text-xl font-bold text-indigo-600">Spreetail</span>
       </div>

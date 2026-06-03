@@ -80,19 +80,19 @@ export async function PUT(
     description: `${actorProfile?.name ?? 'Someone'} edited "${updated.description}"`,
   })
 
-  // Email all other group members about the edit (fire-and-forget)
+  // Email all other group members (fire-and-forget)
   const { data: memberRows } = await db
     .from('group_members').select('user_id').eq('group_id', expense.group_id).neq('user_id', user.id)
   const otherIds = (memberRows ?? []).map(m => m.user_id)
   if (otherIds.length) {
-    const { data: authUsers } = await db.auth.admin.listUsers()
-    const emailMap = Object.fromEntries(
-      (authUsers?.users ?? []).map(u => [u.id, u.email ?? ''])
-    )
-    const { data: group } = await db.from('groups').select('name').eq('id', expense.group_id).single()
+    const [authResults, { data: group }] = await Promise.all([
+      Promise.all(otherIds.map(uid => db.auth.admin.getUserById(uid))),
+      db.from('groups').select('name').eq('id', expense.group_id).single(),
+    ])
+    const emails = authResults.map(r => r.data.user?.email ?? '').filter(Boolean)
     const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://spreetail-app.vercel.app'
     await sendExpenseEditedEmail({
-      to: otherIds.map(uid => emailMap[uid]).filter(Boolean),
+      to: emails,
       editorName: actorProfile?.name ?? 'Someone',
       expenseDescription: updated.description,
       groupName: group?.name ?? 'your group',

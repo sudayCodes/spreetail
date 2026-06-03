@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation'
 import { createClient, createAdminClient } from '@/lib/supabase/server'
 import Sidebar from '@/components/Sidebar'
+import BottomNav from '@/components/BottomNav'
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createClient()
@@ -18,9 +19,10 @@ export default async function DashboardLayout({ children }: { children: React.Re
   return (
     <div className="flex h-full">
       <Sidebar userName={profile?.name ?? user.email ?? ''} />
-      <main className="flex-1 overflow-y-auto">
+      <main className="flex-1 overflow-y-auto pb-16 md:pb-0">
         {children}
       </main>
+      <BottomNav />
     </div>
   )
 }

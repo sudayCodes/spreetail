@@ -169,7 +169,7 @@ export default function NewExpenseForm({
       {/* Split type */}
       <div>
         <label className="block text-sm font-medium text-gray-700 mb-2">Split type</label>
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           {SPLIT_TYPES.map(st => (
             <button
               key={st.value}

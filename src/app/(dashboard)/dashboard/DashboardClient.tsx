@@ -36,11 +36,11 @@ export default function DashboardClient({
   const nonZeroBalances = balances.filter(b => b.balance !== 0)
 
   return (
-    <div className="max-w-3xl mx-auto px-6 py-8 space-y-8">
+    <div className="max-w-3xl mx-auto px-4 sm:px-6 py-8 space-y-8">
       <h1 className="text-2xl font-bold">Dashboard</h1>
 
       {/* Summary cards */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="bg-white border border-gray-200 rounded-xl px-4 py-4 text-center">
           <p className="text-xs text-gray-400 uppercase tracking-wide">You owe</p>
           <p className="text-2xl font-bold text-red-500 mt-1">${(totalOwed / 100).toFixed(2)}</p>

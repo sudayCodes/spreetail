@@ -3,6 +3,8 @@ import { createClient, createAdminClient } from '@/lib/supabase/server'
 import Link from 'next/link'
 import InvitePanel from './InvitePanel'
 import MemberList from './MemberList'
+import GroupChat from '@/components/GroupChat'
+import SettleUpButton from '@/components/SettleUpButton'
 
 export default async function GroupDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
@@ -11,20 +13,44 @@ export default async function GroupDetailPage({ params }: { params: Promise<{ id
 
   const db = createAdminClient()
 
-  const { data: group } = await db.from('groups').select('*').eq('id', id).single()
-  if (!group) notFound()
-
+  // Auth check
   const { data: membership } = await db
     .from('group_members').select('user_id')
     .eq('group_id', id).eq('user_id', user!.id).single()
   if (!membership) notFound()
 
-  const { data: memberRows } = await db
-    .from('group_members').select('user_id, joined_at').eq('group_id', id)
+  // Parallel fetch — group, members, expenses, balances, settlements, messages
+  const [
+    { data: group },
+    { data: memberRows },
+    { data: expenses },
+    { data: balances },
+    { data: settlements },
+    { data: rawMessages },
+  ] = await Promise.all([
+    db.from('groups').select('*').eq('id', id).single(),
+    db.from('group_members').select('user_id, joined_at').eq('group_id', id),
+    db.from('expenses').select('id, description, total_amount, category, paid_by, created_at')
+      .eq('group_id', id).order('created_at', { ascending: false }).limit(10),
+    db.rpc('get_group_balances', { p_group_id: id }),
+    db.from('settlements').select('id, payer_id, receiver_id, amount, created_at')
+      .eq('group_id', id).order('created_at', { ascending: false }).limit(20),
+    db.from('messages').select('id, sender_id, content, created_at')
+      .eq('group_id', id).order('created_at', { ascending: true }).limit(100),
+  ])
 
-  const memberIds = (memberRows ?? []).map(m => m.user_id)
-  const { data: profileRows } = memberIds.length
-    ? await db.from('profiles').select('id, name').in('id', memberIds)
+  if (!group) notFound()
+
+  // Resolve all profile names in one query
+  const allUserIds = [...new Set([
+    ...(memberRows ?? []).map(m => m.user_id),
+    ...(expenses ?? []).map(e => e.paid_by),
+    ...(settlements ?? []).map(s => [s.payer_id, s.receiver_id]).flat(),
+    ...(rawMessages ?? []).map(m => m.sender_id),
+  ])]
+
+  const { data: profileRows } = allUserIds.length
+    ? await db.from('profiles').select('id, name').in('id', allUserIds)
     : { data: [] }
 
   const profileMap = Object.fromEntries((profileRows ?? []).map(p => [p.id, p.name]))
@@ -35,22 +61,22 @@ export default async function GroupDetailPage({ params }: { params: Promise<{ id
     joined_at: m.joined_at,
   }))
 
-  const { data: expenses } = await db
-    .from('expenses').select('id, description, total_amount, category, paid_by, created_at')
-    .eq('group_id', id).order('created_at', { ascending: false }).limit(10)
+  const msgs = (rawMessages ?? []).map(m => ({
+    id: m.id,
+    sender_id: m.sender_id,
+    sender_name: profileMap[m.sender_id] ?? 'Unknown',
+    content: m.content,
+    created_at: m.created_at,
+  }))
 
-  const { data: balances } = await db.rpc('get_group_balances', { p_group_id: id })
-
-  const { data: settlements } = await db
-    .from('settlements').select('id, payer_id, receiver_id, amount, created_at')
-    .eq('group_id', id).order('created_at', { ascending: false }).limit(20)
-
+  const currentUserName = profileMap[user!.id] ?? 'You'
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000'
   const inviteUrl = `${appUrl}/join/${group.invite_token}`
 
   return (
-    <div className="max-w-4xl mx-auto px-6 py-8 space-y-8">
-      <div className="flex items-center justify-between">
+    <div className="max-w-4xl mx-auto px-4 sm:px-6 py-8 space-y-8">
+      {/* Header */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-bold">{group.name}</h1>
           <p className="text-sm text-gray-400 mt-0.5">{members.length} members</p>
@@ -70,15 +96,10 @@ export default async function GroupDetailPage({ params }: { params: Promise<{ id
           {(balances ?? []).map((b: { user_id: string; name: string; balance: number }) => {
             const settled = b.balance === 0
             return (
-              <div
-                key={b.user_id}
-                className={`border rounded-xl px-4 py-3 ${settled ? 'bg-gray-50 border-gray-200' : 'bg-white border-gray-200'}`}
-              >
+              <div key={b.user_id} className={`border rounded-xl px-4 py-3 ${settled ? 'bg-gray-50 border-gray-200' : 'bg-white border-gray-200'}`}>
                 <p className="text-sm font-medium text-gray-700 truncate">{b.name}</p>
                 {settled ? (
-                  <span className="inline-block mt-1 text-xs font-medium text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
-                    Settled ✓
-                  </span>
+                  <span className="inline-block mt-1 text-xs font-medium text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">Settled ✓</span>
                 ) : (
                   <p className={`text-base font-bold mt-1 ${b.balance > 0 ? 'text-green-600' : 'text-red-500'}`}>
                     {b.balance > 0 ? '+' : '-'}${(Math.abs(b.balance) / 100).toFixed(2)}
@@ -89,6 +110,9 @@ export default async function GroupDetailPage({ params }: { params: Promise<{ id
           })}
         </div>
       </section>
+
+      {/* Settle up */}
+      <SettleUpButton groupId={id} currentUserId={user!.id} />
 
       {/* Recent expenses */}
       <section>
@@ -106,13 +130,13 @@ export default async function GroupDetailPage({ params }: { params: Promise<{ id
                   href={`/groups/${id}/expenses/${exp.id}`}
                   className="flex items-center justify-between bg-white border border-gray-200 rounded-xl px-4 py-3 hover:border-indigo-300 transition"
                 >
-                  <div>
-                    <p className="text-sm font-medium">{exp.description}</p>
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium truncate">{exp.description}</p>
                     <p className="text-xs text-gray-400 mt-0.5">
                       Paid by {profileMap[exp.paid_by] ?? 'someone'} · {exp.category}
                     </p>
                   </div>
-                  <span className="text-sm font-semibold text-gray-700">
+                  <span className="text-sm font-semibold text-gray-700 shrink-0 ml-3">
                     ${(exp.total_amount / 100).toFixed(2)}
                   </span>
                 </Link>
@@ -122,13 +146,24 @@ export default async function GroupDetailPage({ params }: { params: Promise<{ id
         )}
       </section>
 
+      {/* Group chat */}
+      <section>
+        <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">Group chat</h2>
+        <GroupChat
+          groupId={id}
+          currentUserId={user!.id}
+          currentUserName={currentUserName}
+          initialMessages={msgs}
+        />
+      </section>
+
       {/* Members */}
       <section>
         <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">Members</h2>
         <MemberList groupId={id} currentUserId={user!.id} members={members} />
       </section>
 
-      {/* Settlement history */}
+      {/* Payment history */}
       {settlements && settlements.length > 0 && (
         <section>
           <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">Payment history</h2>
@@ -143,7 +178,7 @@ export default async function GroupDetailPage({ params }: { params: Promise<{ id
                   </p>
                   <p className="text-xs text-gray-400 mt-0.5">{new Date(s.created_at).toLocaleDateString()}</p>
                 </div>
-                <span className="text-sm font-semibold text-green-600">
+                <span className="text-sm font-semibold text-green-600 shrink-0 ml-3">
                   ${(s.amount / 100).toFixed(2)}
                 </span>
               </li>
