@@ -1,8 +1,11 @@
 import { Resend } from 'resend'
 
-const resend = new Resend(process.env.RESEND_API_KEY)
-// Use onboarding@resend.dev until a custom domain is verified in Resend dashboard
+// Initialized lazily so build-time static analysis doesn't throw without the key
 const FROM = 'Spreetail <onboarding@resend.dev>'
+function getResend() {
+  if (!process.env.RESEND_API_KEY) return null
+  return new Resend(process.env.RESEND_API_KEY)
+}
 
 export async function sendExpenseEditedEmail({
   to,
@@ -17,7 +20,8 @@ export async function sendExpenseEditedEmail({
   groupName: string
   expenseUrl: string
 }) {
-  if (!to.length || !process.env.RESEND_API_KEY) return
+  const resend = getResend()
+  if (!to.length || !resend) return
 
   await resend.emails.send({
     from: FROM,
@@ -29,7 +33,7 @@ export async function sendExpenseEditedEmail({
       <p><a href="${expenseUrl}">View the updated expense →</a></p>
       <p style="color:#888;font-size:12px">You received this because you are a member of ${groupName} on Spreetail.</p>
     `,
-  }).catch(() => {}) // never block the main flow on email failure
+  }).catch(() => {})
 }
 
 export async function sendSettlementEmail({
@@ -47,7 +51,8 @@ export async function sendSettlementEmail({
   groupName: string
   groupUrl: string
 }) {
-  if (!to.length || !process.env.RESEND_API_KEY) return
+  const resend = getResend()
+  if (!to.length || !resend) return
 
   const display = `$${(amount / 100).toFixed(2)}`
 
