@@ -26,14 +26,31 @@ export default function GroupChat({
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
   const channelRef = useRef<ReturnType<ReturnType<typeof createClient>['channel']> | null>(null)
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+  function scrollToBottom(smooth = true) {
+    bottomRef.current?.scrollIntoView({ behavior: smooth ? 'smooth' : 'instant' })
+  }
 
+  function isNearBottom() {
+    const el = containerRef.current
+    if (!el) return true
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 120
+  }
+
+  // Scroll to bottom once on mount — no animation so it doesn't feel jumpy
+  useEffect(() => {
+    scrollToBottom(false)
+  }, [])
+
+  // Incoming messages from others: only scroll if already near the bottom
   const addMessage = useCallback((msg: ChatMessage) => {
-    setMessages(prev => prev.find(m => m.id === msg.id) ? prev : [...prev, msg])
+    setMessages(prev => {
+      if (prev.find(m => m.id === msg.id)) return prev
+      if (isNearBottom()) setTimeout(() => scrollToBottom(), 0)
+      return [...prev, msg]
+    })
   }, [])
 
   useEffect(() => {
@@ -53,7 +70,7 @@ export default function GroupChat({
     return () => { supabase.removeChannel(channel) }
   }, [groupId, currentUserId, addMessage])
 
-  async function sendMessage(e: React.FormEvent) {
+  async function sendMessage(e: { preventDefault(): void }) {
     e.preventDefault()
     if (!input.trim() || sending) return
     setSending(true)
@@ -68,9 +85,10 @@ export default function GroupChat({
       created_at: new Date().toISOString(),
     }
 
-    // Optimistic update
+    // Optimistic update — always scroll when you send your own message
     setMessages(prev => [...prev, optimistic])
     setInput('')
+    setTimeout(() => scrollToBottom(), 0)
 
     // Save to DB
     const res = await fetch(`/api/groups/${groupId}/messages`, {
@@ -109,7 +127,7 @@ export default function GroupChat({
 
   return (
     <div className="bg-white border border-gray-200 rounded-xl flex flex-col h-80 md:h-96">
-      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+      <div ref={containerRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
         {messages.length === 0 && (
           <p className="text-xs text-gray-400 text-center mt-8">No messages yet. Say something!</p>
         )}
