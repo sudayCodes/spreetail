@@ -51,6 +51,14 @@ export async function PUT(
   } = body
 
   const totalCents = amount ? dollarsToCents(amount) : expense.total_amount
+  const amountChanged = amount && dollarsToCents(amount) !== expense.total_amount
+  const splitTypeChanged = split_type !== expense.split_type
+  const hasNewSplitData = !!(member_ids?.length) || Object.keys(split_values).length > 0
+
+  // Unequal splits store per-person dollar amounts as split_values.
+  // Without new split_values we cannot safely redistribute them, so skip recalc.
+  const needsRecalc = hasNewSplitData ||
+    ((amountChanged || splitTypeChanged) && split_type !== 'unequal')
 
   const { data: updated, error: updateErr } = await db
     .from('expenses')
@@ -63,14 +71,24 @@ export async function PUT(
 
   if (updateErr) return NextResponse.json({ error: updateErr.message }, { status: 500 })
 
-  if (member_ids?.length) {
-    await db.from('expense_splits').delete().eq('expense_id', id)
-    const splits = calculateSplits(totalCents, member_ids, split_type, split_values)
-    await db.from('expense_splits').insert(
-      Object.entries(splits).map(([userId, amountOwed]) => ({
-        expense_id: id, user_id: userId, amount_owed: amountOwed,
-      }))
-    )
+  if (needsRecalc) {
+    // Use provided member_ids, or fall back to whoever is already in the splits
+    let idsToUse: string[] = member_ids?.length ? member_ids : []
+    if (!idsToUse.length) {
+      const { data: existingSplits } = await db
+        .from('expense_splits').select('user_id').eq('expense_id', id)
+      idsToUse = (existingSplits ?? []).map((s: { user_id: string }) => s.user_id)
+    }
+
+    if (idsToUse.length) {
+      await db.from('expense_splits').delete().eq('expense_id', id)
+      const splits = calculateSplits(totalCents, idsToUse, split_type, split_values)
+      await db.from('expense_splits').insert(
+        Object.entries(splits).map(([userId, amountOwed]) => ({
+          expense_id: id, user_id: userId, amount_owed: amountOwed,
+        }))
+      )
+    }
   }
 
   const { data: actorProfile } = await db.from('profiles').select('name').eq('id', user.id).single()

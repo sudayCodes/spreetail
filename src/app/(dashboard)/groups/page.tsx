@@ -1,29 +1,37 @@
-import { createClient, createAdminClient } from '@/lib/supabase/server'
+import { getAuthUser, createAdminClient } from '@/lib/supabase/server'
 import Link from 'next/link'
 import CreateGroupButton from './CreateGroupButton'
 
 export default async function GroupsPage() {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const user = await getAuthUser()
 
   const db = createAdminClient()
   const { data: rows } = await db
-    .from('group_members')
-    .select('group_id')
-    .eq('user_id', user!.id)
-
+    .from('group_members').select('group_id').eq('user_id', user!.id)
   const groupIds = (rows ?? []).map(r => r.group_id)
 
-  const { data: groupsData } = groupIds.length
-    ? await db.from('groups').select('id, name, type, created_at').in('id', groupIds)
-    : { data: [] }
+  if (!groupIds.length) {
+    return (
+      <div className="max-w-3xl mx-auto px-6 py-8">
+        <div className="flex items-center justify-between mb-6">
+          <h1 className="text-2xl font-bold">Groups</h1>
+          <CreateGroupButton />
+        </div>
+        <div className="text-center py-20 text-gray-400">
+          <p className="text-lg">No groups yet.</p>
+          <p className="text-sm mt-1">Create one to start splitting expenses.</p>
+        </div>
+      </div>
+    )
+  }
+
+  // Groups data + member counts in parallel (was sequential)
+  const [{ data: groupsData }, { data: memberCounts }] = await Promise.all([
+    db.from('groups').select('id, name, type, created_at').in('id', groupIds),
+    db.from('group_members').select('group_id').in('group_id', groupIds),
+  ])
 
   const groups = (groupsData ?? []).filter(g => g.type === 'group')
-
-  // Member counts
-  const { data: memberCounts } = groupIds.length
-    ? await db.from('group_members').select('group_id').in('group_id', groupIds)
-    : { data: [] }
 
   const countMap: Record<string, number> = {}
   ;(memberCounts ?? []).forEach(m => {

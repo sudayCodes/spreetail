@@ -1,6 +1,7 @@
 import { createServerClient } from '@supabase/ssr'
 import { createClient as createSupabaseClient } from '@supabase/supabase-js'
 import { cookies } from 'next/headers'
+import { cache } from 'react'
 import type { Database } from '@/types/database'
 
 // Auth client — uses anon key + session cookies (for getUser, signIn, signUp)
@@ -30,11 +31,22 @@ export async function createClient() {
 }
 
 // Admin client — uses service role key, bypasses RLS
-// Safe to use in API routes where we manually validate the user via getUser()
+// Singleton: the service-role key never changes, so one instance per warm function
+// invocation is safe and avoids re-instantiating the HTTP client on every call.
+let _admin: ReturnType<typeof createSupabaseClient<Database>> | null = null
 export function createAdminClient() {
-  return createSupabaseClient<Database>(
+  return (_admin ??= createSupabaseClient<Database>(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
     { auth: { autoRefreshToken: false, persistSession: false } }
-  )
+  ))
 }
+
+// Cached getUser for Server Components.
+// React cache() deduplicates calls within the same request render tree,
+// so layout + page both calling this only triggers one Auth round-trip.
+export const getAuthUser = cache(async () => {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  return user
+})

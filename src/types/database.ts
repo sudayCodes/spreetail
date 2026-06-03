@@ -85,6 +85,10 @@ export interface Database {
         Args: { p_group_id: string; p_user_id: string }
         Returns: { creditor_id: string; creditor_name: string; net_owed: number }[]
       }
+      get_all_user_balances: {
+        Args: { p_user_id: string }
+        Returns: { group_id: string; balance: number }[]
+      }
       is_group_member: {
         Args: { gid: string }
         Returns: boolean

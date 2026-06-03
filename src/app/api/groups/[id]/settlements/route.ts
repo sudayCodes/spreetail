@@ -42,6 +42,23 @@ export async function POST(
   if (!amount || isNaN(parseFloat(amount))) return NextResponse.json({ error: 'Valid amount required' }, { status: 400 })
 
   const amountCents = dollarsToCents(amount)
+  if (amountCents <= 0) return NextResponse.json({ error: 'Amount must be greater than zero' }, { status: 400 })
+
+  // Guard: payer cannot send more than they actually owe in this group
+  const { data: currentBalance } = await db.rpc('get_user_group_balance', {
+    p_group_id: groupId,
+    p_user_id: user.id,
+  })
+  const owedCents = currentBalance ?? 0
+  if (owedCents >= 0) {
+    return NextResponse.json({ error: 'You have no outstanding debt in this group' }, { status: 400 })
+  }
+  if (amountCents > Math.abs(owedCents)) {
+    return NextResponse.json({
+      error: `Amount exceeds your debt. You owe $${(Math.abs(owedCents) / 100).toFixed(2)} in this group`,
+    }, { status: 400 })
+  }
+
   const { data: settlement, error } = await db
     .from('settlements')
     .insert({ group_id: groupId, payer_id: user.id, receiver_id, amount: amountCents })

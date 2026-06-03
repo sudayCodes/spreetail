@@ -301,6 +301,7 @@ Implemented as Supabase RPCs: `get_user_group_balance(p_group_id, p_user_id)` an
 | `002_helper_functions.sql` | `get_user_id_by_email`, `get_user_group_balance`, `get_group_balances`, `is_group_member` |
 | `003_realtime.sql` | Adds tables to `supabase_realtime` publication |
 | `004_pairwise_debts.sql` | `get_pairwise_debts(p_group_id, p_user_id)` — exact per-person debt for current user |
+| `005_all_user_balances.sql` | `get_all_user_balances(p_user_id)` — all group balances in one query (replaces N RPCs) |
 
 Run all three in Supabase SQL Editor in order.
 
@@ -347,7 +348,7 @@ setAmount((creditor.balance / 100).toFixed(2))  // WRONG: creditor's total group
 
 ### BUG-02 — Expense edit breaks balances when amount changes without member_ids
 **Severity:** Critical  
-**Status:** Not fixed  
+**Status:** Fixed  
 **Files:** `src/app/api/expenses/[id]/route.ts:66`
 
 **Root cause:**
@@ -366,7 +367,7 @@ If `amount` is updated but `member_ids` is not provided, `total_amount` is saved
 
 ### BUG-03 — No overpayment guard on settlement
 **Severity:** Medium  
-**Status:** Not fixed  
+**Status:** Fixed  
 **Files:** `src/app/api/groups/[id]/settlements/route.ts:44`
 
 **Root cause:** The settlements POST API inserts any amount with no validation. If a user overpays (e.g. due to BUG-01's wrong pre-fill), their balance flips positive (they become an accidental creditor) and the receiver's balance flips negative (they become an accidental debtor).
@@ -377,7 +378,7 @@ If `amount` is updated but `member_ids` is not provided, `total_amount` is saved
 
 ### BUG-04 — API response lag on every tab/route
 **Severity:** Medium  
-**Status:** Not fixed  
+**Status:** Fixed  
 **Files:** `src/lib/supabase/server.ts`, `src/app/api/dashboard/route.ts`, `src/app/(dashboard)/groups/[id]/page.tsx`
 
 **Root causes (multiple):**

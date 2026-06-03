@@ -1,9 +1,8 @@
-import { createClient, createAdminClient } from '@/lib/supabase/server'
+import { getAuthUser, createAdminClient } from '@/lib/supabase/server'
 import DashboardClient from './DashboardClient'
 
 export default async function DashboardPage() {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const user = await getAuthUser()
 
   const db = createAdminClient()
   const { data: memberships } = await db
@@ -18,22 +17,18 @@ export default async function DashboardPage() {
     )
   }
 
-  // All heavy queries in parallel
-  const [balanceResults, { data: groups }, { data: activity }] = await Promise.all([
-    Promise.all(
-      groupIds.map(gid =>
-        db.rpc('get_user_group_balance', { p_group_id: gid, p_user_id: user!.id })
-          .then(r => ({ group_id: gid, balance: r.data ?? 0 }))
-      )
-    ),
+  // Single RPC call for all group balances + groups + activity in parallel
+  const [{ data: allBalances }, { data: groups }, { data: activity }] = await Promise.all([
+    db.rpc('get_all_user_balances', { p_user_id: user!.id }),
     db.from('groups').select('id, name, type').in('id', groupIds),
     db.from('activity_log').select('*').in('group_id', groupIds)
       .order('created_at', { ascending: false }).limit(10),
   ])
 
   const groupMap = Object.fromEntries((groups ?? []).map(g => [g.id, g]))
-  const balances = balanceResults.map(b => ({
-    ...b,
+  const balances = (allBalances ?? []).map(b => ({
+    group_id: b.group_id,
+    balance: b.balance,
     name: groupMap[b.group_id]?.name ?? '',
     type: groupMap[b.group_id]?.type ?? 'group',
   }))
