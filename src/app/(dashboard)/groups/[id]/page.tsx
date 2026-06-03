@@ -1,5 +1,5 @@
 import { notFound } from 'next/navigation'
-import { createClient } from '@/lib/supabase/server'
+import { createClient, createAdminClient } from '@/lib/supabase/server'
 import Link from 'next/link'
 import InvitePanel from './InvitePanel'
 import MemberList from './MemberList'
@@ -9,40 +9,37 @@ export default async function GroupDetailPage({ params }: { params: Promise<{ id
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
 
-  const { data: group } = await supabase
-    .from('groups')
-    .select('*')
-    .eq('id', id)
-    .single()
+  const db = createAdminClient()
 
+  const { data: group } = await db.from('groups').select('*').eq('id', id).single()
   if (!group) notFound()
 
-  // Verify current user is a member
-  const { data: membership } = await supabase
-    .from('group_members')
-    .select('user_id')
-    .eq('group_id', id)
-    .eq('user_id', user!.id)
-    .single()
-
+  const { data: membership } = await db
+    .from('group_members').select('user_id')
+    .eq('group_id', id).eq('user_id', user!.id).single()
   if (!membership) notFound()
 
-  // Members with profiles
-  const { data: members } = await supabase
-    .from('group_members')
-    .select('user_id, joined_at, profile:profiles(name)')
-    .eq('group_id', id)
+  const { data: memberRows } = await db
+    .from('group_members').select('user_id, joined_at').eq('group_id', id)
 
-  // Recent expenses (last 10)
-  const { data: expenses } = await supabase
-    .from('expenses')
-    .select('id, description, total_amount, category, paid_by, created_at, paid_by_profile:profiles!expenses_paid_by_fkey(name)')
-    .eq('group_id', id)
-    .order('created_at', { ascending: false })
-    .limit(10)
+  const memberIds = (memberRows ?? []).map(m => m.user_id)
+  const { data: profileRows } = memberIds.length
+    ? await db.from('profiles').select('id, name').in('id', memberIds)
+    : { data: [] }
 
-  // Group balances
-  const { data: balances } = await supabase.rpc('get_group_balances', { p_group_id: id })
+  const profileMap = Object.fromEntries((profileRows ?? []).map(p => [p.id, p.name]))
+
+  const members = (memberRows ?? []).map(m => ({
+    user_id: m.user_id,
+    name: profileMap[m.user_id] ?? 'Unknown',
+    joined_at: m.joined_at,
+  }))
+
+  const { data: expenses } = await db
+    .from('expenses').select('id, description, total_amount, category, paid_by, created_at')
+    .eq('group_id', id).order('created_at', { ascending: false }).limit(10)
+
+  const { data: balances } = await db.rpc('get_group_balances', { p_group_id: id })
 
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000'
   const inviteUrl = `${appUrl}/join/${group.invite_token}`
@@ -52,7 +49,7 @@ export default async function GroupDetailPage({ params }: { params: Promise<{ id
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">{group.name}</h1>
-          <p className="text-sm text-gray-400 mt-0.5">{members?.length ?? 0} members</p>
+          <p className="text-sm text-gray-400 mt-0.5">{members.length} members</p>
         </div>
         <Link
           href={`/groups/${id}/expenses/new`}
@@ -87,27 +84,24 @@ export default async function GroupDetailPage({ params }: { params: Promise<{ id
           <p className="text-sm text-gray-400">No expenses yet. Add the first one!</p>
         ) : (
           <ul className="space-y-2">
-            {expenses.map(exp => {
-              const paidByProfile = exp.paid_by_profile as unknown as { name: string } | null
-              return (
-                <li key={exp.id}>
-                  <Link
-                    href={`/groups/${id}/expenses/${exp.id}`}
-                    className="flex items-center justify-between bg-white border border-gray-200 rounded-xl px-4 py-3 hover:border-indigo-300 transition"
-                  >
-                    <div>
-                      <p className="text-sm font-medium">{exp.description}</p>
-                      <p className="text-xs text-gray-400 mt-0.5">
-                        Paid by {paidByProfile?.name ?? 'someone'} · {exp.category}
-                      </p>
-                    </div>
-                    <span className="text-sm font-semibold text-gray-700">
-                      ${(exp.total_amount / 100).toFixed(2)}
-                    </span>
-                  </Link>
-                </li>
-              )
-            })}
+            {expenses.map(exp => (
+              <li key={exp.id}>
+                <Link
+                  href={`/groups/${id}/expenses/${exp.id}`}
+                  className="flex items-center justify-between bg-white border border-gray-200 rounded-xl px-4 py-3 hover:border-indigo-300 transition"
+                >
+                  <div>
+                    <p className="text-sm font-medium">{exp.description}</p>
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      Paid by {profileMap[exp.paid_by] ?? 'someone'} · {exp.category}
+                    </p>
+                  </div>
+                  <span className="text-sm font-semibold text-gray-700">
+                    ${(exp.total_amount / 100).toFixed(2)}
+                  </span>
+                </Link>
+              </li>
+            ))}
           </ul>
         )}
       </section>
@@ -115,15 +109,7 @@ export default async function GroupDetailPage({ params }: { params: Promise<{ id
       {/* Members */}
       <section>
         <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">Members</h2>
-        <MemberList
-          groupId={id}
-          currentUserId={user!.id}
-          members={(members ?? []).map(m => ({
-            user_id: m.user_id,
-            name: (m.profile as unknown as ({ name: string } | null))?.name ?? 'Unknown',
-            joined_at: m.joined_at,
-          }))}
-        />
+        <MemberList groupId={id} currentUserId={user!.id} members={members} />
       </section>
 
       {/* Invite */}

@@ -1,4 +1,4 @@
-import { createClient } from '@/lib/supabase/server'
+import { createClient, createAdminClient } from '@/lib/supabase/server'
 import Link from 'next/link'
 import CreateGroupButton from './CreateGroupButton'
 
@@ -6,14 +6,29 @@ export default async function GroupsPage() {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
 
-  const { data: rows } = await supabase
+  const db = createAdminClient()
+  const { data: rows } = await db
     .from('group_members')
-    .select('group:groups(id, name, type, created_at, group_members(count))')
+    .select('group_id')
     .eq('user_id', user!.id)
 
-  const groups = (rows ?? [])
-    .map(r => (r as unknown as { group: { id: string; name: string; type: string; created_at: string; group_members: { count: number }[] } | null }).group)
-    .filter((g): g is NonNullable<typeof g> => g !== null && g.type === 'group')
+  const groupIds = (rows ?? []).map(r => r.group_id)
+
+  const { data: groupsData } = groupIds.length
+    ? await db.from('groups').select('id, name, type, created_at').in('id', groupIds)
+    : { data: [] }
+
+  const groups = (groupsData ?? []).filter(g => g.type === 'group')
+
+  // Member counts
+  const { data: memberCounts } = groupIds.length
+    ? await db.from('group_members').select('group_id').in('group_id', groupIds)
+    : { data: [] }
+
+  const countMap: Record<string, number> = {}
+  ;(memberCounts ?? []).forEach(m => {
+    countMap[m.group_id] = (countMap[m.group_id] ?? 0) + 1
+  })
 
   return (
     <div className="max-w-3xl mx-auto px-6 py-8">
@@ -37,9 +52,7 @@ export default async function GroupsPage() {
               >
                 <div>
                   <p className="font-medium text-gray-900">{g.name}</p>
-                  <p className="text-xs text-gray-400 mt-0.5">
-                    {g.group_members?.[0]?.count ?? 0} members
-                  </p>
+                  <p className="text-xs text-gray-400 mt-0.5">{countMap[g.id] ?? 0} members</p>
                 </div>
                 <span className="text-gray-300">→</span>
               </Link>

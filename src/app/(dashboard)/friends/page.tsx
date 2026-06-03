@@ -1,4 +1,4 @@
-import { createClient } from '@/lib/supabase/server'
+import { createClient, createAdminClient } from '@/lib/supabase/server'
 import Link from 'next/link'
 import AddFriendButton from './AddFriendButton'
 
@@ -6,34 +6,33 @@ export default async function FriendsPage() {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
 
-  // Friends = groups with type='direct' that the user belongs to
-  const { data: rows } = await supabase
-    .from('group_members')
-    .select('group_id, group:groups!inner(id, name, type, invite_token)')
-    .eq('user_id', user!.id)
+  const db = createAdminClient()
+  const { data: rows } = await db
+    .from('group_members').select('group_id').eq('user_id', user!.id)
+  const groupIds = (rows ?? []).map(r => r.group_id)
 
-  type GroupRow = { id: string; name: string; type: string; invite_token: string }
-  const directGroups = (rows ?? [])
-    .map(r => (r.group as unknown as GroupRow | null))
-    .filter((g): g is GroupRow => g !== null && g.type === 'direct')
+  const { data: directGroups } = groupIds.length
+    ? await db.from('groups').select('id, name, invite_token').eq('type', 'direct').in('id', groupIds)
+    : { data: [] }
 
-  // For each direct group, get the other member's profile
   const friendData = await Promise.all(
-    directGroups.map(async g => {
-      const { data: otherMember } = await supabase
-        .from('group_members')
-        .select('user_id, profile:profiles(name)')
-        .eq('group_id', g.id)
-        .neq('user_id', user!.id)
-        .single()
+    (directGroups ?? []).map(async g => {
+      const { data: otherMember } = await db
+        .from('group_members').select('user_id')
+        .eq('group_id', g.id).neq('user_id', user!.id).single()
 
-      const balance = await supabase
-        .rpc('get_user_group_balance', { p_group_id: g.id, p_user_id: user!.id })
+      const { data: profile } = otherMember
+        ? await db.from('profiles').select('name').eq('id', otherMember.user_id).single()
+        : { data: null }
+
+      const { data: balance } = await db.rpc('get_user_group_balance', {
+        p_group_id: g.id, p_user_id: user!.id,
+      })
 
       return {
         group_id: g.id,
-        name: (otherMember?.profile as unknown as ({ name: string } | null))?.name ?? g.name,
-        balance: balance.data ?? 0,
+        name: profile?.name ?? g.name,
+        balance: balance ?? 0,
       }
     })
   )

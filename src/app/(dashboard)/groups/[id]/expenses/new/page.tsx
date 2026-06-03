@@ -1,5 +1,5 @@
-import { notFound, redirect } from 'next/navigation'
-import { createClient } from '@/lib/supabase/server'
+import { notFound } from 'next/navigation'
+import { createClient, createAdminClient } from '@/lib/supabase/server'
 import NewExpenseForm from './NewExpenseForm'
 
 export default async function NewExpensePage({ params }: { params: Promise<{ id: string }> }) {
@@ -7,21 +7,22 @@ export default async function NewExpensePage({ params }: { params: Promise<{ id:
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
 
-  const { data: membership } = await supabase
+  const db = createAdminClient()
+
+  const { data: membership } = await db
     .from('group_members').select('user_id')
     .eq('group_id', groupId).eq('user_id', user!.id).single()
-
   if (!membership) notFound()
 
-  const { data: memberRows } = await supabase
-    .from('group_members')
-    .select('user_id, profile:profiles(name)')
-    .eq('group_id', groupId)
+  const { data: memberRows } = await db
+    .from('group_members').select('user_id').eq('group_id', groupId)
 
-  const members = (memberRows ?? []).map(m => ({
-    id: m.user_id,
-    name: (m.profile as unknown as { name: string } | null)?.name ?? 'Unknown',
-  }))
+  const memberIds = (memberRows ?? []).map(m => m.user_id)
+  const { data: profiles } = memberIds.length
+    ? await db.from('profiles').select('id, name').in('id', memberIds)
+    : { data: [] }
+
+  const members = (profiles ?? []).map(p => ({ id: p.id, name: p.name }))
 
   return (
     <div className="max-w-xl mx-auto px-6 py-8">

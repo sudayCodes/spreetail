@@ -1,4 +1,4 @@
-import { createClient } from '@/lib/supabase/server'
+import { createClient, createAdminClient } from '@/lib/supabase/server'
 
 const ACTION_ICONS: Record<string, string> = {
   CREATED_EXPENSE: '💸',
@@ -13,17 +13,15 @@ export default async function ActivityPage() {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
 
-  const { data: memberships } = await supabase
+  const db = createAdminClient()
+  const { data: memberships } = await db
     .from('group_members').select('group_id').eq('user_id', user!.id)
   const groupIds = (memberships ?? []).map(m => m.group_id)
 
   const { data: activity } = groupIds.length
-    ? await supabase
-        .from('activity_log')
-        .select('*')
+    ? await db.from('activity_log').select('*')
         .in('group_id', groupIds)
-        .order('created_at', { ascending: false })
-        .limit(100)
+        .order('created_at', { ascending: false }).limit(100)
     : { data: [] }
 
   return (
@@ -41,9 +39,7 @@ export default async function ActivityPage() {
               <span className="text-lg shrink-0">{ACTION_ICONS[a.action_type] ?? '•'}</span>
               <div className="flex-1 min-w-0">
                 <p className="text-sm text-gray-700">{a.description}</p>
-                <p className="text-xs text-gray-400 mt-0.5">
-                  {new Date(a.created_at).toLocaleString()}
-                </p>
+                <p className="text-xs text-gray-400 mt-0.5">{new Date(a.created_at).toLocaleString()}</p>
               </div>
             </li>
           ))}

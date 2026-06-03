@@ -1,5 +1,5 @@
 import { notFound } from 'next/navigation'
-import { createClient } from '@/lib/supabase/server'
+import { createClient, createAdminClient } from '@/lib/supabase/server'
 import Link from 'next/link'
 import GroupChat from '@/components/GroupChat'
 import SettleUpButton from '@/components/SettleUpButton'
@@ -13,51 +13,55 @@ export default async function ExpenseDetailPage({
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
 
-  const { data: expense } = await supabase
-    .from('expenses')
-    .select('*')
-    .eq('id', expenseId)
-    .single()
+  const db = createAdminClient()
 
+  const { data: expense } = await db.from('expenses').select('*').eq('id', expenseId).single()
   if (!expense || expense.group_id !== groupId) notFound()
 
-  const { data: membership } = await supabase
+  const { data: membership } = await db
     .from('group_members').select('user_id')
     .eq('group_id', groupId).eq('user_id', user!.id).single()
   if (!membership) notFound()
 
-  const { data: splitRows } = await supabase
-    .from('expense_splits')
-    .select('*, profile:profiles(name)')
-    .eq('expense_id', expenseId)
+  const { data: splitRows } = await db
+    .from('expense_splits').select('user_id, amount_owed').eq('expense_id', expenseId)
 
-  const { data: paidByProfile } = await supabase
+  const { data: paidByProfile } = await db
     .from('profiles').select('name').eq('id', expense.paid_by).single()
 
-  const { data: initialMessages } = await supabase
-    .from('messages')
-    .select('*, sender:profiles(name)')
-    .eq('group_id', groupId)
-    .order('created_at', { ascending: true })
-    .limit(100)
+  // Resolve all names for splits
+  const splitUserIds = (splitRows ?? []).map(s => s.user_id)
+  const { data: splitProfiles } = splitUserIds.length
+    ? await db.from('profiles').select('id, name').in('id', splitUserIds)
+    : { data: [] }
+  const splitProfileMap = Object.fromEntries((splitProfiles ?? []).map(p => [p.id, p.name]))
 
   const splits = (splitRows ?? []).map(s => ({
     user_id: s.user_id,
-    name: (s.profile as unknown as ({ name: string } | null))?.name ?? 'Unknown',
+    name: splitProfileMap[s.user_id] ?? 'Unknown',
     amount_owed: s.amount_owed,
   }))
 
-  const msgs = (initialMessages ?? []).map(m => ({
+  const { data: rawMessages } = await db
+    .from('messages').select('id, sender_id, content, created_at')
+    .eq('group_id', groupId).order('created_at', { ascending: true }).limit(100)
+
+  const senderIds = [...new Set((rawMessages ?? []).map(m => m.sender_id))]
+  const { data: senderProfiles } = senderIds.length
+    ? await db.from('profiles').select('id, name').in('id', senderIds)
+    : { data: [] }
+  const senderMap = Object.fromEntries((senderProfiles ?? []).map(p => [p.id, p.name]))
+
+  const msgs = (rawMessages ?? []).map(m => ({
     id: m.id,
     sender_id: m.sender_id,
-    sender_name: (m.sender as unknown as ({ name: string } | null))?.name ?? 'Unknown',
+    sender_name: senderMap[m.sender_id] ?? 'Unknown',
     content: m.content,
     created_at: m.created_at,
   }))
 
   return (
     <div className="max-w-2xl mx-auto px-6 py-8 space-y-8">
-      {/* Header */}
       <div>
         <Link href={`/groups/${groupId}`} className="text-xs text-gray-400 hover:text-gray-600">← Back to group</Link>
         <h1 className="text-2xl font-bold mt-2">{expense.description}</h1>
@@ -66,16 +70,12 @@ export default async function ExpenseDetailPage({
         </p>
       </div>
 
-      {/* Amount */}
       <div className="bg-indigo-50 border border-indigo-200 rounded-xl px-6 py-4">
         <p className="text-xs text-indigo-400 uppercase tracking-wide font-medium">Total</p>
-        <p className="text-3xl font-bold text-indigo-700 mt-1">
-          ${(expense.total_amount / 100).toFixed(2)}
-        </p>
+        <p className="text-3xl font-bold text-indigo-700 mt-1">${(expense.total_amount / 100).toFixed(2)}</p>
         <p className="text-xs text-indigo-400 mt-1 capitalize">Split {expense.split_type}</p>
       </div>
 
-      {/* Splits */}
       <section>
         <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">Who owes what</h2>
         <div className="space-y-2">
@@ -88,17 +88,11 @@ export default async function ExpenseDetailPage({
         </div>
       </section>
 
-      {/* Settle up */}
       <SettleUpButton groupId={groupId} />
 
-      {/* Real-time group chat */}
       <section>
         <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">Group chat</h2>
-        <GroupChat
-          groupId={groupId}
-          currentUserId={user!.id}
-          initialMessages={msgs}
-        />
+        <GroupChat groupId={groupId} currentUserId={user!.id} initialMessages={msgs} />
       </section>
     </div>
   )
