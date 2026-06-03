@@ -25,12 +25,12 @@ export default function GroupChat({
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages)
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
-  const bottomRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const channelRef = useRef<ReturnType<ReturnType<typeof createClient>['channel']> | null>(null)
 
-  function scrollToBottom(smooth = true) {
-    bottomRef.current?.scrollIntoView({ behavior: smooth ? 'smooth' : 'instant' })
+  function scrollToBottom() {
+    const el = containerRef.current
+    if (el) el.scrollTop = el.scrollHeight
   }
 
   function isNearBottom() {
@@ -41,7 +41,7 @@ export default function GroupChat({
 
   // Scroll to bottom once on mount — no animation so it doesn't feel jumpy
   useEffect(() => {
-    scrollToBottom(false)
+    scrollToBottom()
   }, [])
 
   // Incoming messages from others: only scroll if already near the bottom
@@ -146,7 +146,6 @@ export default function GroupChat({
             </div>
           )
         })}
-        <div ref={bottomRef} />
       </div>
 
       <form onSubmit={sendMessage} className="border-t border-gray-100 px-3 py-2 flex gap-2">
