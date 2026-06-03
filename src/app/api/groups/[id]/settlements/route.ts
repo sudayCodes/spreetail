@@ -44,18 +44,23 @@ export async function POST(
   const amountCents = dollarsToCents(amount)
   if (amountCents <= 0) return NextResponse.json({ error: 'Amount must be greater than zero' }, { status: 400 })
 
-  // Guard: payer cannot send more than they actually owe in this group
-  const { data: currentBalance } = await db.rpc('get_user_group_balance', {
+  // Guard: check pairwise debt to this specific receiver — not total group balance.
+  // Total balance would allow overpaying one person as long as you owe others enough to cover.
+  const { data: pairwiseDebts, error: pairwiseErr } = await db.rpc('get_pairwise_debts', {
     p_group_id: groupId,
     p_user_id: user.id,
   })
-  const owedCents = currentBalance ?? 0
-  if (owedCents >= 0) {
-    return NextResponse.json({ error: 'You have no outstanding debt in this group' }, { status: 400 })
+  if (pairwiseErr) return NextResponse.json({ error: pairwiseErr.message }, { status: 500 })
+
+  const debtToReceiver = (pairwiseDebts ?? []).find(
+    (d: { creditor_id: string; net_owed: number }) => d.creditor_id === receiver_id
+  )
+  if (!debtToReceiver || debtToReceiver.net_owed <= 0) {
+    return NextResponse.json({ error: 'You have no outstanding debt to this person in this group' }, { status: 400 })
   }
-  if (amountCents > Math.abs(owedCents)) {
+  if (amountCents > debtToReceiver.net_owed) {
     return NextResponse.json({
-      error: `Amount exceeds your debt. You owe $${(Math.abs(owedCents) / 100).toFixed(2)} in this group`,
+      error: `Amount exceeds what you owe this person. You owe $${(debtToReceiver.net_owed / 100).toFixed(2)}`,
     }, { status: 400 })
   }
 

@@ -28,7 +28,15 @@ export default function SettleUpButton({
     setFetching(true)
     fetch(`/api/groups/${groupId}/pairwise-debts`)
       .then(r => r.json())
-      .then(data => setDebts(data.debts ?? []))
+      .then(data => {
+        const list: PairwiseDebt[] = data.debts ?? []
+        setDebts(list)
+        // Auto-select when there is only one creditor — makes it one-click settle
+        if (list.length === 1) {
+          setReceiverId(list[0].creditor_id)
+          setAmount((list[0].net_owed / 100).toFixed(2))
+        }
+      })
       .catch(() => {})
       .finally(() => setFetching(false))
   }, [open, groupId])
@@ -105,19 +113,26 @@ export default function SettleUpButton({
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Paying to</label>
-                  <select
-                    required
-                    value={receiverId}
-                    onChange={e => handleReceiverChange(e.target.value)}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  >
-                    <option value="">Select person…</option>
-                    {debts.map(d => (
-                      <option key={d.creditor_id} value={d.creditor_id}>
-                        {d.creditor_name} — you owe ${(d.net_owed / 100).toFixed(2)}
-                      </option>
-                    ))}
-                  </select>
+                  {debts.length === 1 ? (
+                    <p className="text-sm font-medium text-gray-800 border border-gray-200 rounded-lg px-3 py-2 bg-gray-50">
+                      {debts[0].creditor_name}
+                      <span className="text-gray-400 font-normal"> — you owe ${(debts[0].net_owed / 100).toFixed(2)}</span>
+                    </p>
+                  ) : (
+                    <select
+                      required
+                      value={receiverId}
+                      onChange={e => handleReceiverChange(e.target.value)}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    >
+                      <option value="">Select person…</option>
+                      {debts.map(d => (
+                        <option key={d.creditor_id} value={d.creditor_id}>
+                          {d.creditor_name} — you owe ${(d.net_owed / 100).toFixed(2)}
+                        </option>
+                      ))}
+                    </select>
+                  )}
                 </div>
 
                 <div>
