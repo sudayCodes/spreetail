@@ -88,7 +88,7 @@ export default async function ExpenseDetailPage({
         </div>
       </section>
 
-      <SettleUpButton groupId={groupId} />
+      <SettleUpButton groupId={groupId} currentUserId={user!.id} />
 
       <section>
         <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">Group chat</h2>

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { dollarsToCents } from '@/lib/balance'
+import { sendSettlementEmail } from '@/lib/email'
 
 export async function GET(
   _req: Request,
@@ -55,6 +56,25 @@ export async function POST(
     action_type: 'RECORDED_SETTLEMENT',
     description: `${actorProfile?.name ?? 'Someone'} paid ${receiverProfile?.name ?? 'someone'} $${(amountCents / 100).toFixed(2)}`,
   })
+
+  // Email the receiver so they know they've been paid (fire-and-forget)
+  const { data: authUsers } = await db.auth.admin.listUsers()
+  const emailMap = Object.fromEntries(
+    (authUsers?.users ?? []).map(u => [u.id, u.email ?? ''])
+  )
+  const { data: group } = await db.from('groups').select('name').eq('id', groupId).single()
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://spreetail-app.vercel.app'
+  const receiverEmail = emailMap[receiver_id]
+  if (receiverEmail) {
+    await sendSettlementEmail({
+      to: [receiverEmail],
+      payerName: actorProfile?.name ?? 'Someone',
+      receiverName: receiverProfile?.name ?? 'you',
+      amount: amountCents,
+      groupName: group?.name ?? 'your group',
+      groupUrl: `${appUrl}/groups/${groupId}`,
+    })
+  }
 
   return NextResponse.json({ settlement }, { status: 201 })
 }

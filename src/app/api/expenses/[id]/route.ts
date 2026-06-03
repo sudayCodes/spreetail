@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createClient, createAdminClient } from '@/lib/supabase/server'
 import { calculateSplits, dollarsToCents } from '@/lib/balance'
+import { sendExpenseEditedEmail } from '@/lib/email'
 import type { SplitType, ExpenseCategory } from '@/types/database'
 
 export async function GET(
@@ -78,6 +79,26 @@ export async function PUT(
     action_type: 'EDITED_EXPENSE',
     description: `${actorProfile?.name ?? 'Someone'} edited "${updated.description}"`,
   })
+
+  // Email all other group members about the edit (fire-and-forget)
+  const { data: memberRows } = await db
+    .from('group_members').select('user_id').eq('group_id', expense.group_id).neq('user_id', user.id)
+  const otherIds = (memberRows ?? []).map(m => m.user_id)
+  if (otherIds.length) {
+    const { data: authUsers } = await db.auth.admin.listUsers()
+    const emailMap = Object.fromEntries(
+      (authUsers?.users ?? []).map(u => [u.id, u.email ?? ''])
+    )
+    const { data: group } = await db.from('groups').select('name').eq('id', expense.group_id).single()
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://spreetail-app.vercel.app'
+    await sendExpenseEditedEmail({
+      to: otherIds.map(uid => emailMap[uid]).filter(Boolean),
+      editorName: actorProfile?.name ?? 'Someone',
+      expenseDescription: updated.description,
+      groupName: group?.name ?? 'your group',
+      expenseUrl: `${appUrl}/groups/${expense.group_id}/expenses/${id}`,
+    })
+  }
 
   return NextResponse.json({ expense: updated })
 }
